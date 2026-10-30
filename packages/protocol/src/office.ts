@@ -32,6 +32,8 @@ export const Task = z.object({
   tags: z.array(z.string()),
   /** The agent working on it. */
   assignee: Id.optional(),
+  /** Who gave it to that agent last (its creation or the last assignment): "owner" or an agent's id. */
+  assigned_by: z.string().optional(),
   parent_id: Id.optional(),
   thread_id: Id,
   /** Waiting for the owner (a decision, an answer). */

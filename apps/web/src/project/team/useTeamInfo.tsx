@@ -6,6 +6,7 @@ import { loadRoutines, useRoutines } from "../../data/routines.ts";
 import { useData } from "../../data/state.ts";
 import { loadTasks, tasksLoaded, useTasks } from "../../data/tasks.ts";
 import { useLanguage, useT } from "../../i18n/index.ts";
+import { handoffEdges } from "./handoffs.ts";
 import type { NodeInfo } from "./TeamCanvas.tsx";
 
 /** Runs that keep an agent off idle: a delegation queued for a slot shows as work in flight (DECISIONS.md#d-096). */
@@ -22,8 +23,8 @@ export const engineLabelOf = (engine: string) => engine.split(/[/:]/)[0] ?? engi
 
 /**
  * What each card shows: live state from runs, counters (chats, open tasks, routines) and the engine; plus the
- * delegations in flight, as "caller>callee" pairs, for the moving dot on the curves. The super-agent also gets its
- * active profile name for the two-line description when it has none of its own.
+ * delegations in flight and cards handed over to an agent at work, as "giver>agent" pairs, for the moving dot on the
+ * curves. The super-agent also gets its active profile name for the two-line description when it has none of its own.
  */
 export function useTeamInfo(leadId: string | undefined, leadLabel: string) {
   const t = useT();
@@ -58,18 +59,24 @@ export function useTeamInfo(leadId: string | undefined, leadLabel: string) {
     return { chats, open, rts };
   }, [threads, tasks, routines]);
 
-  const { status, live } = useMemo(() => {
+  const { status, delegated } = useMemo(() => {
     const status = new Map<string, NodeInfo["status"]>();
-    const live = new Set<string>();
+    const delegated = new Set<string>();
     for (const r of Object.values(runs)) {
       if (!LIVE.has(r.state)) continue;
       const waiting = r.state === "input-required";
       if (waiting || !status.has(r.agent_id)) status.set(r.agent_id, waiting ? "waiting" : "running");
       const caller = r.parent_run_id ? runs[r.parent_run_id] : undefined;
-      if (caller && caller.agent_id !== r.agent_id) live.add(`${caller.agent_id}>${r.agent_id}`);
+      if (caller && caller.agent_id !== r.agent_id) delegated.add(`${caller.agent_id}>${r.agent_id}`);
     }
-    return { status, live };
+    return { status, delegated };
   }, [runs]);
+  // A card an agent gave to another also moves the dot while that agent works it: a team that hands work over on the
+  // board instead of delegating shows its flow too.
+  const live = useMemo(() => {
+    const working = new Set([...status].filter(([, s]) => s !== "idle").map(([id]) => id));
+    return new Set([...delegated, ...handoffEdges(Object.values(tasks), working)]);
+  }, [delegated, status, tasks]);
 
   const superDesc = profileName ? t("team.superDesc", { profile: profileName }) : t("team.superDescNone");
 

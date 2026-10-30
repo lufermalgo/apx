@@ -137,9 +137,16 @@ const tasksQuery = () =>
         .whereRef("threads.task_id", "=", "tasks.id")
         .select((c) => c.fn.countAll<number>().as("n"))
         .as("chats"),
+    )
+    // Who gave it to its agent: the creation with one, or the last assignment.
+    .select(
+      raw<string | null>`(SELECT e."by" FROM task_events e WHERE e.task_id = tasks.id AND e.op IN ('create', 'assign')
+        AND json_extract(e.data, '$.assignee') IS NOT NULL ORDER BY e.n DESC LIMIT 1)`.as("assigned_by"),
     );
 
-const toTask = (r: Selectable<TasksTable> & { person_name: string | null; chats: number | null }): Task => ({
+const toTask = (
+  r: Selectable<TasksTable> & { person_name: string | null; chats: number | null; assigned_by: string | null },
+): Task => ({
   id: r.id,
   ...opt("project_id", r.project_id),
   title: r.title,
@@ -150,6 +157,7 @@ const toTask = (r: Selectable<TasksTable> & { person_name: string | null; chats:
   priority: r.priority as TaskPriority,
   tags: JSON.parse(r.tags) as string[],
   ...opt("assignee", r.assignee),
+  ...(r.assignee ? opt("assigned_by", r.assigned_by) : {}),
   ...opt("parent_id", r.parent_id),
   thread_id: r.thread_id,
   awaits_owner: Boolean(r.awaits_owner),
