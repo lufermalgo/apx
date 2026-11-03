@@ -1171,4 +1171,8 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE tasks ADD COLUMN goal TEXT;
   ALTER TABLE tasks ADD COLUMN asked TEXT;
   `,
+  // Usage summaries filter model runs by date; keep old histories from blocking the core while they are counted.
+  `
+  CREATE INDEX runs_usage_started ON runs(started_at) WHERE model IS NOT NULL;
+  `,
 ];

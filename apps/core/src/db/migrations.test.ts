@@ -502,3 +502,26 @@ test("being in Apps is kept apart from being an app: what the owner put there st
     cleanup();
   }
 });
+
+test("upgrading indexes dated model usage without dropping older runs", () => {
+  const { db, cleanup } = upgradeFrom("CREATE INDEX runs_usage_started", (db) => {
+    db.prepare(
+      "INSERT INTO threads (id, kind, title, agent_ids, created_at, updated_at) VALUES ('th', 'loose', 'Chat', '[]', '2026-10-01', '2026-10-01')",
+    ).run();
+    const insert = db.prepare(
+      "INSERT INTO runs (id, thread_id, agent_id, state, started_at, created_at, model) VALUES (?, 'th', 'agent', 'completed', ?, ?, ?)",
+    );
+    insert.run("run1", "2026-10-01", "2026-10-01", "model");
+    insert.run("run2", "2026-10-02", "2026-10-02", null);
+  });
+  try {
+    const plan = db
+      .prepare("EXPLAIN QUERY PLAN SELECT id FROM runs WHERE model IS NOT NULL AND started_at >= ?")
+      .all("2026-10-01");
+    assert.match(String(plan[0]?.detail), /USING INDEX runs_usage_started/);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM runs").get()?.n, 2);
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
