@@ -1171,4 +1171,8 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE tasks ADD COLUMN goal TEXT;
   ALTER TABLE tasks ADD COLUMN asked TEXT;
   `,
+  // Finding chats that hold tasks must not parse every chat's context on each office tick.
+  `
+  CREATE INDEX threads_held_count ON threads(json_array_length(context, '$.held'));
+  `,
 ];

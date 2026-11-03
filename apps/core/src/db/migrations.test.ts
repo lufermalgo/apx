@@ -502,3 +502,37 @@ test("being in Apps is kept apart from being an app: what the owner put there st
     cleanup();
   }
 });
+
+test("upgrading indexes held tasks and keeps the index current on context changes", () => {
+  const { db, cleanup } = upgradeFrom("CREATE INDEX threads_held_count", (db) => {
+    const add = db.prepare(
+      "INSERT INTO threads (id, kind, title, agent_ids, context, created_at, updated_at) VALUES (?, 'loose', 'Chat', '[]', ?, '2026-10-01', '2026-10-01')",
+    );
+    add.run("th_a", "{}");
+    add.run("th_b", '{"held":[{"task":"task_a"}]}');
+  });
+  try {
+    const sql = "SELECT id FROM threads WHERE json_array_length(context, '$.held') > ?";
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0);
+    assert.match(String(plan[0]?.detail), /USING INDEX threads_held_count/);
+    assert.deepEqual(
+      db
+        .prepare(sql)
+        .all(0)
+        .map((row) => row.id),
+      ["th_b"],
+    );
+    db.prepare("UPDATE threads SET context = ? WHERE id = ?").run('{"held":[]}', "th_b");
+    db.prepare("UPDATE threads SET context = ? WHERE id = ?").run('{"held":[{"task":"task_b"}]}', "th_a");
+    assert.deepEqual(
+      db
+        .prepare(sql)
+        .all(0)
+        .map((row) => row.id),
+      ["th_a"],
+    );
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
