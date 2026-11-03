@@ -1008,3 +1008,78 @@ test("coordinator chat authority requires a verified owner chain, project scope 
     "revocation remains effective",
   );
 });
+
+test("one verified review return can reach its direct author, but ordinary backflow and loops stay bounded", () => {
+  const store = env.core.store;
+  const task = store.tasks.create({
+    title: "Reviewed work",
+    description: "Implement and review",
+    status: "doing",
+    assignee: "vera",
+    thread_id: store.threads.create({ kind: "task", title: "Reviewed work", agent_ids: ["vera"] }).id,
+    by: "superagent",
+  });
+  const rootChat = store.threads.create({ kind: "loose", title: "Owner", agent_ids: ["superagent"] });
+  const root = store.runs.create({
+    thread_id: rootChat.id,
+    agent_id: "superagent",
+    trigger: "user",
+    input: { origin: { kind: "user" }, text: "Deliver work" },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  const devChat = store.threads.create({
+    kind: "loose",
+    title: "Implementation",
+    task_id: task.id,
+    agent_ids: ["vera"],
+  });
+  const dev = store.runs.create({
+    thread_id: devChat.id,
+    agent_id: "vera",
+    trigger: "a2a",
+    input: {
+      origin: { kind: "agent", id: "superagent", name: "Lead", thread_id: rootChat.id, run_id: root.id },
+      text: "Implement",
+    },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  const reviewed = store.tasks.change(task.id, { assignee: "scout", status: "review" }, "vera");
+  assert.ok(reviewed);
+  const qaChat = store.threads.create({ kind: "loose", title: "Review", task_id: task.id, agent_ids: ["scout"] });
+  const qa = store.runs.create({
+    thread_id: qaChat.id,
+    agent_id: "scout",
+    trigger: "a2a",
+    input: {
+      origin: { kind: "agent", id: "vera", name: "Vera", thread_id: devChat.id, run_id: dev.id },
+      text: "Review",
+    },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  const context = { id: "scout", thread_id: qaChat.id, run_id: qa.id };
+  assert.equal(authorizedChildHandoff(store, reviewed, context, "vera", { allowReviewReturn: true }), "allowed");
+  assert.equal(authorizedChildHandoff(store, reviewed, context, "superagent", { allowReviewReturn: true }), "backflow");
+  assert.equal(
+    authorizedChildHandoff(store, { ...reviewed, status: "doing" }, context, "vera", { allowReviewReturn: true }),
+    "backflow",
+  );
+  assert.equal(authorizedChildHandoff(store, reviewed, context, "vera"), "backflow");
+  const returned = store.tasks.change(task.id, { assignee: "vera", status: "review" }, "scout");
+  assert.ok(returned);
+  const continued = store.runs.create({
+    thread_id: devChat.id,
+    agent_id: "vera",
+    trigger: "a2a",
+    input: {
+      origin: { kind: "agent", id: "scout", name: "Scout", thread_id: qaChat.id, run_id: qa.id },
+      text: "Review result",
+    },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  assert.equal(
+    authorizedChildHandoff(store, returned, { id: "vera", thread_id: devChat.id, run_id: continued.id }, "scout", {
+      allowReviewReturn: true,
+    }),
+    "limit",
+  );
+});

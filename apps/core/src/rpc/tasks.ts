@@ -355,8 +355,16 @@ export function taskHandlers(
           ? authorizedExistingHandoff(store, cur, ctx.agent)
           : undefined;
       const active =
-        handoff === undefined && ctx.agent && c.assignee && c.assignee !== cur.assignee && !cur.proposed
-          ? authorizedChildHandoff(store, cur, ctx.agent, c.assignee, { allowCoordinatorChat: true })
+        handoff !== "denied" &&
+        handoff !== "limit" &&
+        ctx.agent &&
+        c.assignee &&
+        c.assignee !== cur.assignee &&
+        !cur.proposed
+          ? authorizedChildHandoff(store, cur, ctx.agent, c.assignee, {
+              allowCoordinatorChat: true,
+              allowReviewReturn: true,
+            })
           : undefined;
       const forced =
         ctx.agent && c.assignee && c.assignee !== cur.assignee && !cur.proposed

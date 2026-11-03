@@ -207,7 +207,7 @@ The proposals:
   rather than unrelated older parent tasks. A recorded routine run can start such a chain, and linked automatic
   continuations preserve it. If APX cannot verify the chain, the existing proposal rule still applies.
 - **Work given back up the chain.** A sub-task for an agent in the active chain is proposed, so agents cannot
-  ping-pong the same work. When the active chain cannot be verified, APX checks the task's parent history instead.
+  ping-pong the same work. When the active chain cannot be verified, APX checks the task's parent history instead. A verified review may return the same task once to the agent who sent it for review; the hand-off depth limit still applies.
 
 The same goes when an agent hands an existing task to another agent: if giving it new would make it a proposal, the
 hand-off is proposed too, and it starts once you accept it. For a task you assigned or accepted yourself, its assigned

@@ -404,7 +404,7 @@ export function authorizedChildHandoff(
   parent: Task | undefined,
   agent: { id: string; thread_id: string; run_id: string },
   assignee: string | undefined,
-  options: { allowCoordinatorChat?: boolean } = {},
+  options: { allowCoordinatorChat?: boolean; allowReviewReturn?: boolean } = {},
 ): "allowed" | "limit" | "backflow" | undefined {
   const thread = store.threads.get(agent.thread_id);
   let run = store.runs.get(agent.run_id);
@@ -431,6 +431,20 @@ export function authorizedChildHandoff(
   const taskAuthority = authorizedExistingHandoff(store, parent, agent, { allowCoordinatorChat: coordinatorChat });
   if (taskAuthority === "limit") return "limit";
   if (taskAuthority === "denied") return undefined;
+  const initial = run.input?.origin;
+  const assignment = store.tasks.events(parent.id).findLast((e) => Object.hasOwn(e.data, "assignee"));
+  const reviewReturn = Boolean(
+    options.allowReviewReturn &&
+      !coordinatorChat &&
+      parent.status === "review" &&
+      initial?.kind === "agent" &&
+      initial.id === assignee &&
+      store.threads.get(initial.thread_id)?.task_id === parent.id &&
+      assignment?.by === initial.id &&
+      assignment.data.assignee === agent.id &&
+      assignment.data.status === "review" &&
+      assignment.at <= run.started_at,
+  );
   const seen = new Set<string>();
   const agents = new Set<string>();
   let hops = 0;
@@ -501,7 +515,7 @@ export function authorizedChildHandoff(
     ) {
       if (store.threads.context(run.thread_id).client) return undefined;
       if (hops >= MAX_HANDOFF_DEPTH) return "limit";
-      if (assignee && assignee !== agent.id && agents.has(assignee)) return "backflow";
+      if (assignee && assignee !== agent.id && agents.has(assignee) && !reviewReturn) return "backflow";
       return "allowed";
     }
     if (origin.kind === "agent") {

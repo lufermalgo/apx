@@ -211,7 +211,7 @@ Las propuestas:
   en lugar de tareas padre antiguas. Una ejecución registrada de una rutina puede iniciar esa cadena, y las
   continuaciones automáticas enlazadas la conservan. Si no puede verificarla, conserva la regla de propuestas existente.
 - **Trabajo devuelto hacia arriba.** Una subtarea para un agente de la cadena activa queda propuesta para evitar pases
-  de ida y vuelta. Si no se puede verificar esa cadena, APX comprueba el historial de tareas padre.
+  de ida y vuelta. Si no se puede verificar esa cadena, APX comprueba el historial de tareas padre. Una revisión verificada puede devolver la misma tarea una vez al agente que la envió a revisión; el límite de pases sigue vigente.
 
 Lo mismo pasa cuando un agente le pasa una tarea que ya existe a otro agente: si darla nueva la volvería propuesta, el
 pase también queda propuesto y arranca cuando lo aceptás. Si vos asignaste o aceptaste esa tarea, su responsable puede
