@@ -976,6 +976,17 @@ test("coordinator chat authority requires a verified owner chain, project scope 
       .id,
     by: "secure-lead",
   });
+  assert.equal(
+    authorizedChildHandoff(store, workerTask, ctx, "secure-lead", options),
+    undefined,
+    "cannot take work assigned to someone else",
+  );
+  const revokedUnassigned = store.tasks.change(workerTask.id, { assignee: null }, "owner");
+  assert.equal(
+    authorizedChildHandoff(store, revokedUnassigned, ctx, "secure-lead", options),
+    undefined,
+    "cannot override owner unassignment",
+  );
   const workerChat = store.threads.create({
     kind: "agent",
     title: "Worker",
@@ -1009,7 +1020,7 @@ test("coordinator chat authority requires a verified owner chain, project scope 
   );
 });
 
-test("one verified review return can reach its direct author, but ordinary backflow and loops stay bounded", () => {
+test("a verified review return can reach its direct author without permitting ordinary backflow", () => {
   const store = env.core.store;
   const task = store.tasks.create({
     title: "Reviewed work",
@@ -1080,6 +1091,6 @@ test("one verified review return can reach its direct author, but ordinary backf
     authorizedChildHandoff(store, returned, { id: "vera", thread_id: devChat.id, run_id: continued.id }, "scout", {
       allowReviewReturn: true,
     }),
-    "limit",
+    "allowed",
   );
 });

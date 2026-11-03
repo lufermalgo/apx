@@ -64,14 +64,14 @@ test("owner assignment proceeds through continuation and independent review with
   }
 });
 
-test("review can return the same task to its author once without a proposal", async () => {
+test("two review rounds can return an owner-assigned task without a proposal", async () => {
   let devTurns = 0;
   const llm = scriptedLlm((req, { system, afterTool }) => {
     const task = /Task (task_\w+)/.exec(JSON.stringify(req.messages))?.[1] ?? "";
     if (system.startsWith("You are Vera")) {
       if (afterTool) return say("Handed to review.");
       devTurns++;
-      if (devTurns === 1) return callTool("review", "task_update", { task, status: "review", assignee: "scout" });
+      if (devTurns <= 2) return callTool("review", "task_update", { task, status: "review", assignee: "scout" });
       return say("Review result received.");
     }
     if (system.startsWith("You are Scout")) {
@@ -106,7 +106,7 @@ test("review can return the same task to its author once without a proposal", as
         store.threads
           .byTask(task.id)
           .flatMap((t) => store.runs.list(t.id, 20))
-          .filter((r) => r.agent_id === "vera" && r.ended_at).length >= 2,
+          .filter((r) => r.agent_id === "vera" && r.ended_at).length >= 3,
       "author receives review",
     );
     const result = store.tasks.get(task.id);
@@ -116,7 +116,7 @@ test("review can return the same task to its author once without a proposal", as
       store.threads
         .byTask(task.id)
         .flatMap((t) => store.runs.list(t.id, 20))
-        .some((r) => r.agent_id === "scout" && r.state === "completed"),
+        .filter((r) => r.agent_id === "scout" && r.state === "completed").length >= 2,
     );
   } finally {
     await env.core.close();

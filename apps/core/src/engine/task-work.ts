@@ -365,6 +365,8 @@ function consult(
 
 /** Hand-offs above a task an agent may still add to on its own; deeper, its new task is a proposal for the owner. */
 const MAX_HANDOFF_DEPTH = 3;
+/** Two review rounds are bounded separately from nested delegation. */
+const MAX_REVIEW_ROUNDS = 2;
 
 /**
  * Why an agent's new task waits for the owner instead of starting: a chain of hand-offs too deep, or work given back to
@@ -420,7 +422,7 @@ export function authorizedChildHandoff(
     parent?.state !== "open" ||
     parent.proposed ||
     parent.awaits_owner ||
-    parent.assignee !== agent.id ||
+    (parent.assignee !== agent.id && !(coordinatorChat && !parent.assignee)) ||
     !thread ||
     (thread.task_id !== parent.id && !coordinatorChat) ||
     run?.thread_id !== thread.id ||
@@ -428,6 +430,12 @@ export function authorizedChildHandoff(
     run.ended_at
   )
     return undefined;
+  if (coordinatorChat && !parent.assignee) {
+    const ownerDecision = store.tasks
+      .events(parent.id)
+      .findLast((e) => e.by === "owner" && (Object.hasOwn(e.data, "assignee") || e.data.proposed === false));
+    if (ownerDecision?.data.assignee === null) return undefined;
+  }
   const taskAuthority = authorizedExistingHandoff(store, parent, agent, { allowCoordinatorChat: coordinatorChat });
   if (taskAuthority === "limit") return "limit";
   if (taskAuthority === "denied") return undefined;
@@ -448,6 +456,9 @@ export function authorizedChildHandoff(
   const seen = new Set<string>();
   const agents = new Set<string>();
   let hops = 0;
+  let reviewMoves = 0;
+  let reviewPair: string | undefined;
+  const events = store.tasks.events(parent.id);
   while (run && seen.size < 32 && !seen.has(run.id)) {
     seen.add(run.id);
     agents.add(run.agent_id);
@@ -514,7 +525,8 @@ export function authorizedChildHandoff(
         store.routines.ofRun(run.id) === origin.id)
     ) {
       if (store.threads.context(run.thread_id).client) return undefined;
-      if (hops >= MAX_HANDOFF_DEPTH) return "limit";
+      if (hops + (reviewMoves ? 1 : 0) >= MAX_HANDOFF_DEPTH) return "limit";
+      if (reviewReturn && reviewMoves >= MAX_REVIEW_ROUNDS * 2) return "limit";
       if (assignee && assignee !== agent.id && agents.has(assignee) && !reviewReturn) return "backflow";
       return "allowed";
     }
@@ -528,7 +540,24 @@ export function authorizedChildHandoff(
         previous.started_at > run.started_at
       )
         return undefined;
-      hops++;
+      const currentRun = run;
+      const reviewEvent =
+        options.allowReviewReturn &&
+        store.threads.get(run.thread_id)?.task_id === parent.id &&
+        store.threads.get(previous.thread_id)?.task_id === parent.id &&
+        events.findLast(
+          (e) =>
+            e.by === origin.id &&
+            e.data.assignee === currentRun.agent_id &&
+            e.data.status === "review" &&
+            e.at >= previous.started_at &&
+            e.at <= currentRun.started_at,
+        );
+      const pair = [origin.id, run.agent_id].sort().join("\0");
+      if (reviewEvent && (!reviewPair || reviewPair === pair)) {
+        reviewPair = pair;
+        reviewMoves++;
+      } else hops++;
       run = previous;
       continue;
     }
@@ -618,21 +647,26 @@ export function authorizedExistingHandoff(
   if (typeof initial !== "string") return "denied";
   let previous: unknown = initial;
   let transfers = 0;
+  let reviewMoves = 0;
+  let reviewPair: string | undefined;
   for (const event of events.slice(anchor + 1)) {
     if (!Object.hasOwn(event.data, "assignee")) continue;
     const next = event.data.assignee;
     if (next !== previous) {
       if (typeof next !== "string" || event.by !== previous) return "denied";
-      transfers++;
+      const pair = [previous, next].sort().join("\0");
+      if (event.data.status === "review" && (!reviewPair || reviewPair === pair)) {
+        reviewPair = pair;
+        reviewMoves++;
+      } else transfers++;
     }
     previous = next;
   }
   if (previous !== task.assignee) return "denied";
-  return transfers >= MAX_HANDOFF_DEPTH ? "limit" : "allowed";
+  return transfers + (reviewMoves ? 1 : 0) >= MAX_HANDOFF_DEPTH || reviewMoves >= MAX_REVIEW_ROUNDS * 2
+    ? "limit"
+    : "allowed";
 }
-
-/** Review rounds an agent reviewer gets on one task before the owner decides. */
-const MAX_REVIEW_ROUNDS = 2;
 
 /** Whether a task's start time is still ahead: its work waits until then. */
 export const startsLater = (task: Pick<Task, "start_at">, now = new Date()): boolean =>

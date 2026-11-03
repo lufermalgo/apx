@@ -207,13 +207,13 @@ The proposals:
   rather than unrelated older parent tasks. A recorded routine run can start such a chain, and linked automatic
   continuations preserve it. If APX cannot verify the chain, the existing proposal rule still applies.
 - **Work given back up the chain.** A sub-task for an agent in the active chain is proposed, so agents cannot
-  ping-pong the same work. When the active chain cannot be verified, APX checks the task's parent history instead. A verified review may return the same task once to the agent who sent it for review; the hand-off depth limit still applies.
+  ping-pong the same work. When the active chain cannot be verified, APX checks the task's parent history instead. The same task can move between an author and reviewer for up to two verified review rounds; unrelated hand-offs still have a depth limit.
 
 The same goes when an agent hands an existing task to another agent: if giving it new would make it a proposal, the
 hand-off is proposed too, and it starts once you accept it. For a task you assigned or accepted yourself, its assigned
 agent can hand that same task on from its work chat without counting older parent tasks as new hand-offs. Up to three
 actual changes of assignee may follow that authorization; after that, the next hand-off waits for you. Work given back up
-its chain still waits for you, and a proposal already waiting is never accepted automatically. A project orchestrator can also hand on its own task from an owner-requested project chat when the active chain is verified; this does not accept an existing proposal.
+its chain still waits for you, and a proposal already waiting is never accepted automatically. A project orchestrator can also hand on its own or an unassigned task from an owner-requested project chat when the active chain is verified; this does not accept an existing proposal.
 
 ## Commitments
 
