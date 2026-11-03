@@ -5,6 +5,7 @@
 // (the question and its answer, under the task's conversation, shown there as a card); an hourly pickup starts what was
 // assigned and never began. An agent's @mention on a task is a consult whose answer comes back to it (DECISIONS.md#d-132).
 import type { Author, Part, Task, Thread } from "@apx/protocol";
+import { projectOrchestrator } from "../domain/agent-directory.ts";
 import { ownerIdentity } from "../domain/owner.ts";
 import type { Origin, RunRecord } from "../domain/runs.ts";
 import type { Store } from "../domain/store.ts";
@@ -403,21 +404,31 @@ export function authorizedChildHandoff(
   parent: Task | undefined,
   agent: { id: string; thread_id: string; run_id: string },
   assignee: string | undefined,
+  options: { allowCoordinatorChat?: boolean } = {},
 ): "allowed" | "limit" | "backflow" | undefined {
   const thread = store.threads.get(agent.thread_id);
   let run = store.runs.get(agent.run_id);
+  const coordinatorChat = Boolean(
+    options.allowCoordinatorChat &&
+      parent?.project_id &&
+      thread?.project_id === parent.project_id &&
+      !thread.task_id &&
+      (thread.kind === "agent" || thread.kind === "loose") &&
+      projectOrchestrator(store.agents.list().filter((a) => a.project_id === parent.project_id))?.agent.id === agent.id,
+  );
   if (
     parent?.state !== "open" ||
     parent.proposed ||
     parent.awaits_owner ||
     parent.assignee !== agent.id ||
-    thread?.task_id !== parent.id ||
+    !thread ||
+    (thread.task_id !== parent.id && !coordinatorChat) ||
     run?.thread_id !== thread.id ||
     run.agent_id !== agent.id ||
     run.ended_at
   )
     return undefined;
-  const taskAuthority = authorizedExistingHandoff(store, parent, agent);
+  const taskAuthority = authorizedExistingHandoff(store, parent, agent, { allowCoordinatorChat: coordinatorChat });
   if (taskAuthority === "limit") return "limit";
   if (taskAuthority === "denied") return undefined;
   const seen = new Set<string>();
@@ -569,12 +580,14 @@ export function authorizedExistingHandoff(
   store: Store,
   task: Task,
   agent: { id: string; thread_id: string; run_id: string },
+  options: { allowCoordinatorChat?: boolean } = {},
 ): "allowed" | "limit" | "denied" | undefined {
   const thread = store.threads.get(agent.thread_id);
   const run = store.runs.get(agent.run_id);
   if (
     task.assignee !== agent.id ||
-    thread?.task_id !== task.id ||
+    !thread ||
+    (thread.task_id !== task.id && !options.allowCoordinatorChat) ||
     run?.thread_id !== thread.id ||
     run.agent_id !== agent.id ||
     run.ended_at

@@ -780,3 +780,231 @@ test("an unrelated agent cannot inherit an owner-authorized task by reassigning 
     "denied",
   );
 });
+
+test("a project orchestrator can hand on its own old task from an owner-requested project chat", async () => {
+  const store = env.core.store;
+  const project = "example-project";
+  store.projects.upsert({ id: project, name: "Example" });
+  store.agents.upsertApc({
+    id: "example-lead",
+    name: "Lead",
+    project_id: project,
+    slug: "lead",
+    role: "Lead",
+    prompt: "",
+    extra: { orchestrator: true },
+  });
+  store.agents.upsertApc({
+    id: "example-worker",
+    name: "Worker",
+    project_id: project,
+    parent: "example-lead",
+    slug: "worker",
+    role: "Worker",
+    prompt: "",
+    extra: {},
+  });
+  const old = (title: string, parent?: string) =>
+    store.tasks.create({
+      title,
+      status: "todo",
+      project_id: project,
+      parent_id: parent,
+      thread_id: store.threads.create({ kind: "task", title, project_id: project, agent_ids: ["example-lead"] }).id,
+      by: "example-worker",
+    });
+  const a = old("Old root"),
+    b = old("Old phase", a.id),
+    c = old("Old work", b.id);
+  const current = store.tasks.create({
+    title: "Ready product work",
+    description: "Complete a bounded change.",
+    status: "doing",
+    project_id: project,
+    parent_id: c.id,
+    assignee: "example-lead",
+    thread_id: store.threads.create({
+      kind: "task",
+      title: "Ready product work",
+      project_id: project,
+      agent_ids: ["example-lead"],
+    }).id,
+    by: "example-worker",
+  });
+  handing = { task: current.id, to: "example-worker" };
+  const chat = await env.client.call("threads.create", {
+    kind: "loose",
+    agent_id: "example-lead",
+    project_id: project,
+    title: "Project coordination",
+  });
+  await env.client.call("threads.send", { thread: chat.id, text: "pass it on" });
+  await env.settle(chat.id);
+  const result = store.tasks.get(current.id);
+  assert.notEqual(result?.proposed, true);
+  const sessions = store.threads.byTask(current.id).filter((t) => t.agent_ids[0] === "example-worker");
+  assert.equal(sessions.length, 1);
+  await env.settle(sessions[0]?.id ?? "");
+  assert.ok(
+    store.runs.list(sessions[0]?.id ?? "").some((r) => r.agent_id === "example-worker" && r.state === "completed"),
+  );
+});
+
+test("coordinator chat authority requires a verified owner chain, project scope and current assignment", () => {
+  const store = env.core.store;
+  const project = "secure-example";
+  store.projects.upsert({ id: project, name: "Secure example" });
+  store.agents.upsertApc({
+    id: "secure-lead",
+    name: "Lead",
+    project_id: project,
+    slug: "lead",
+    role: "Lead",
+    prompt: "",
+    extra: { orchestrator: true },
+  });
+  store.agents.upsertApc({
+    id: "secure-worker",
+    name: "Worker",
+    project_id: project,
+    parent: "secure-lead",
+    slug: "worker",
+    role: "Worker",
+    prompt: "",
+    extra: {},
+  });
+  const task = store.tasks.create({
+    title: "Owner-scope work",
+    description: "Work safely",
+    status: "doing",
+    project_id: project,
+    assignee: "secure-lead",
+    thread_id: store.threads.create({ kind: "task", title: "Task", project_id: project, agent_ids: ["secure-lead"] })
+      .id,
+    by: "secure-worker",
+  });
+  const chat = store.threads.create({
+    kind: "agent",
+    title: "Coordination",
+    project_id: project,
+    agent_ids: ["secure-lead"],
+  });
+  const original = store.runs.create({
+    thread_id: chat.id,
+    agent_id: "secure-lead",
+    trigger: "user",
+    input: { origin: { kind: "user" }, text: "Coordinate" },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  const helperChat = store.threads.create({
+    kind: "a2a",
+    title: "Audit",
+    project_id: project,
+    agent_ids: ["secure-lead"],
+    parent_id: chat.id,
+  });
+  const helper = store.runs.create({
+    thread_id: helperChat.id,
+    agent_id: "secure-lead",
+    trigger: "a2a",
+    parent_run_id: original.id,
+    input: {
+      origin: { kind: "agent", id: "secure-lead", name: "Lead", thread_id: chat.id, run_id: original.id },
+      text: "Audit",
+    },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  store.runs.setState(helper, "completed");
+  const resumed = store.runs.create({
+    thread_id: chat.id,
+    agent_id: "secure-lead",
+    trigger: "a2a_result",
+    input: {
+      origin: {
+        kind: "delegation_result",
+        agent_id: "secure-lead",
+        name: "Audit",
+        thread_id: helperChat.id,
+        run_id: helper.id,
+        state: "completed",
+      },
+      text: "Result",
+    },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  const ctx = { id: "secure-lead", thread_id: chat.id, run_id: resumed.id };
+  const options = { allowCoordinatorChat: true };
+  assert.equal(authorizedChildHandoff(store, task, ctx, "secure-worker", options), "allowed");
+  assert.equal(
+    authorizedChildHandoff(store, task, ctx, "secure-worker"),
+    undefined,
+    "not a general child-task exemption",
+  );
+  store.threads.mergeContext(chat.id, { client: "external-app" });
+  assert.equal(
+    authorizedChildHandoff(store, task, ctx, "secure-worker", options),
+    undefined,
+    "external clients are not the owner",
+  );
+  store.threads.mergeContext(chat.id, { client: undefined });
+  const foreign = store.threads.create({ kind: "agent", title: "Wrong project", agent_ids: ["secure-lead"] });
+  const foreignRun = store.runs.create({
+    thread_id: foreign.id,
+    agent_id: "secure-lead",
+    trigger: "user",
+    input: { origin: { kind: "user" }, text: "Coordinate" },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  assert.equal(
+    authorizedChildHandoff(
+      store,
+      task,
+      { ...ctx, thread_id: foreign.id, run_id: foreignRun.id },
+      "secure-worker",
+      options,
+    ),
+    undefined,
+    "no project scope",
+  );
+  const workerTask = store.tasks.create({
+    title: "Worker task",
+    description: "Work safely",
+    status: "doing",
+    project_id: project,
+    assignee: "secure-worker",
+    thread_id: store.threads.create({ kind: "task", title: "Task", project_id: project, agent_ids: ["secure-worker"] })
+      .id,
+    by: "secure-lead",
+  });
+  const workerChat = store.threads.create({
+    kind: "agent",
+    title: "Worker",
+    project_id: project,
+    agent_ids: ["secure-worker"],
+  });
+  const workerRun = store.runs.create({
+    thread_id: workerChat.id,
+    agent_id: "secure-worker",
+    trigger: "user",
+    input: { origin: { kind: "user" }, text: "Coordinate" },
+    deadline_at: "2099-01-01T00:00:00Z",
+  });
+  assert.equal(
+    authorizedChildHandoff(
+      store,
+      workerTask,
+      { id: "secure-worker", thread_id: workerChat.id, run_id: workerRun.id },
+      "secure-lead",
+      options,
+    ),
+    undefined,
+    "worker is not the project orchestrator",
+  );
+  store.tasks.change(task.id, { assignee: null }, "owner");
+  const reassigned = store.tasks.change(task.id, { assignee: "secure-lead" }, "secure-worker");
+  assert.equal(
+    authorizedChildHandoff(store, reassigned, ctx, "secure-worker", options),
+    undefined,
+    "revocation remains effective",
+  );
+});

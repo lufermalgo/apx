@@ -3647,4 +3647,4 @@ stay in force; a proposal already waiting is never auto-accepted. This is not an
 owner-authorized. Automatic task continuations record their prior run; a stall revival does so only when that run is in
 the same task chat and belongs to the assignee. Legacy records without this link fall back to the existing rule.
 A routine may itself be managed by an agent granted Total settings access: its owner-equivalent privilege is unchanged,
-and the delegation-depth cap is not a global rate limit across separate scheduled runs.
+and the delegation-depth cap is not a global rate limit across separate scheduled runs. When the project orchestrator is still the task assignee, an owner-origin project coordination chat may also hand it on through a verified active chain; other agents, external clients, other projects and revoked authorizations do not gain that exemption.
