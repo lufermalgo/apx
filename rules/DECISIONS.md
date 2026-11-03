@@ -3628,3 +3628,23 @@ Rejected: a second tool beside `task_update` (two ways to write one task's plan)
 thread's context (the messages already hold it, and tools change chats only through the protocol), and moving the
 checklist to the newest answer by removing it from older ones (it rewrites what the owner already read; each answer
 keeps the plan as it stood).
+
+
+## D-192 — 2026-11-02 — Owner-started work may hand on without inheriting old task depth
+
+A task explicitly assigned or accepted by the owner may sit under a long historical task tree. Counting all those
+parents as new hand-offs made an independent review wait for a second approval, even though the owner had just started
+the task. A different agent's chat must not gain that authority: the active caller must be the task's current assignee
+in its own task session, after the owner's assignment or acceptance. An owner clearing the assignee revokes the anchor.
+
+For that one existing task, hand-offs since the anchor are counted instead of its old parent depth: up to three actual
+changes of assignee, then the next is proposed. A no-op assignment does not spend one. For a new subtask, APX follows
+verified run origins, resumptions and task-result provenance back to the owner's request or recorded routine; a short active chain may hand
+on without inheriting unrelated task history. Three active hops or work handed back to an active sender is proposed.
+Missing, inconsistent or external provenance falls back to the old parent-chain rule. The existing refusal for work
+given back up an unverified ancestor chain, A2A restrictions, budgets, project scope and explicit proposal acceptance
+stay in force; a proposal already waiting is never auto-accepted. This is not an assertion that every old task is
+owner-authorized. Automatic task continuations record their prior run; a stall revival does so only when that run is in
+the same task chat and belongs to the assignee. Legacy records without this link fall back to the existing rule.
+A routine may itself be managed by an agent granted Total settings access: its owner-equivalent privilege is unchanged,
+and the delegation-depth cap is not a global rate limit across separate scheduled runs.

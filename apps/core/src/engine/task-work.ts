@@ -374,6 +374,7 @@ export function proposalReason(
   parentId: string | undefined,
   assignee: string | undefined,
   creator: string,
+  options: { ignoreHistoricalDepth?: boolean; ignoreHistoricalBackflow?: boolean } = {},
 ): string | undefined {
   const chain: Task[] = [];
   const seen = new Set<string>();
@@ -384,10 +385,223 @@ export function proposalReason(
     chain.push(t);
     id = t.parent_id;
   }
-  if (chain.length >= MAX_HANDOFF_DEPTH) return `it would be ${chain.length + 1} hand-offs deep`;
-  if (assignee && assignee !== creator && chain.some((t) => t.created_by === assignee))
+  if (!options.ignoreHistoricalDepth && chain.length >= MAX_HANDOFF_DEPTH)
+    return `it would be ${chain.length + 1} hand-offs deep`;
+  if (
+    !options.ignoreHistoricalBackflow &&
+    assignee &&
+    assignee !== creator &&
+    chain.some((t) => t.created_by === assignee)
+  )
     return "it gives work back up its own chain";
   return undefined;
+}
+
+/** Reconstruct a short owner-origin chain, without trusting stored run depth or task ancestry. */
+export function authorizedChildHandoff(
+  store: Store,
+  parent: Task | undefined,
+  agent: { id: string; thread_id: string; run_id: string },
+  assignee: string | undefined,
+): "allowed" | "limit" | "backflow" | undefined {
+  const thread = store.threads.get(agent.thread_id);
+  let run = store.runs.get(agent.run_id);
+  if (
+    parent?.state !== "open" ||
+    parent.proposed ||
+    parent.awaits_owner ||
+    parent.assignee !== agent.id ||
+    thread?.task_id !== parent.id ||
+    run?.thread_id !== thread.id ||
+    run.agent_id !== agent.id ||
+    run.ended_at
+  )
+    return undefined;
+  const taskAuthority = authorizedExistingHandoff(store, parent, agent);
+  if (taskAuthority === "limit") return "limit";
+  if (taskAuthority === "denied") return undefined;
+  const seen = new Set<string>();
+  const agents = new Set<string>();
+  let hops = 0;
+  while (run && seen.size < 32 && !seen.has(run.id)) {
+    seen.add(run.id);
+    agents.add(run.agent_id);
+    const input: RunRecord["input"] = run.input;
+    if (!input) return undefined;
+    const previousId = input.resume_of ?? input.retry_of ?? input.continues;
+    if (previousId) {
+      const previous = store.runs.get(previousId);
+      if (
+        !previous ||
+        previous.thread_id !== run.thread_id ||
+        previous.agent_id !== run.agent_id ||
+        previous.started_at > run.started_at
+      )
+        return undefined;
+      run = previous;
+      continue;
+    }
+    const origin: Origin = input.origin;
+    if (origin.kind === "input_answer") {
+      const answer = store.inputs.get(origin.input_id);
+      const previous: RunRecord | undefined = answer ? store.runs.get(answer.run_id) : undefined;
+      if (
+        run.trigger !== "user" ||
+        !answer ||
+        !["answered", "approved", "denied"].includes(answer.state) ||
+        !answer.answered_at ||
+        answer.answered_at > run.started_at ||
+        answer.thread_id !== run.thread_id ||
+        answer.agent_id !== run.agent_id ||
+        !previous ||
+        previous.thread_id !== run.thread_id ||
+        previous.agent_id !== run.agent_id ||
+        !previous.ended_at ||
+        previous.ended_at > run.started_at
+      )
+        return undefined;
+      run = previous;
+      continue;
+    }
+    if (origin.kind === "task_continue" || origin.kind === "stalled_task") {
+      const previous: RunRecord | undefined = origin.from_run ? store.runs.get(origin.from_run) : undefined;
+      if (
+        run.trigger !== "system" ||
+        store.threads.get(run.thread_id)?.task_id !== origin.task_id ||
+        !previous ||
+        previous.thread_id !== run.thread_id ||
+        previous.agent_id !== run.agent_id ||
+        !previous.ended_at ||
+        previous.ended_at > run.started_at ||
+        (origin.kind === "task_continue" && previous.state !== "completed") ||
+        (origin.kind === "stalled_task" && (previous.state === "canceled" || previous.end_reason === "provider_limit"))
+      )
+        return undefined;
+      run = previous;
+      continue;
+    }
+    if (
+      (origin.kind === "user" && run.trigger === "user") ||
+      (origin.kind === "channel" && origin.role === "owner" && run.trigger === "channel") ||
+      (origin.kind === "routine" &&
+        run.trigger === "routine" &&
+        store.threads.get(run.thread_id)?.kind === "routine" &&
+        store.routines.ofRun(run.id) === origin.id)
+    ) {
+      if (store.threads.context(run.thread_id).client) return undefined;
+      if (hops >= MAX_HANDOFF_DEPTH) return "limit";
+      if (assignee && assignee !== agent.id && agents.has(assignee)) return "backflow";
+      return "allowed";
+    }
+    if (origin.kind === "agent") {
+      if (run.trigger !== "a2a") return undefined;
+      const previous = store.runs.get(origin.run_id);
+      if (
+        !previous ||
+        previous.thread_id !== origin.thread_id ||
+        previous.agent_id !== origin.id ||
+        previous.started_at > run.started_at
+      )
+        return undefined;
+      hops++;
+      run = previous;
+      continue;
+    }
+    if (origin.kind === "delegation_result") {
+      const child: RunRecord | undefined = store.runs.get(origin.run_id);
+      const previous: RunRecord | undefined = child?.parent_run_id ? store.runs.get(child.parent_run_id) : undefined;
+      if (
+        run.trigger !== "a2a_result" ||
+        !child ||
+        child.thread_id !== origin.thread_id ||
+        child.agent_id !== origin.agent_id ||
+        child.state !== origin.state ||
+        !child.ended_at ||
+        child.ended_at > run.started_at ||
+        !previous ||
+        previous.thread_id !== run.thread_id ||
+        previous.agent_id !== run.agent_id ||
+        previous.started_at > child.started_at
+      )
+        return undefined;
+      run = previous;
+      continue;
+    }
+    if (origin.kind === "task_result") {
+      if (run.trigger !== "a2a_result") return undefined;
+      const child = store.tasks.get(origin.task_id);
+      const events = child && store.tasks.events(child.id);
+      const created = events?.find((e) => e.op === "create");
+      const closed = events?.findLast((e) => e.op === "done" || e.op === "drop" || e.op === "reopen");
+      const taskThread = store.threads.get(run.thread_id);
+      if (
+        !child ||
+        child.parent_id !== taskThread?.task_id ||
+        child.state !== origin.state ||
+        created?.by !== run.agent_id ||
+        !closed ||
+        closed.by !== origin.agent_id ||
+        closed.op !== (origin.state === "done" ? "done" : "drop") ||
+        closed.at > run.started_at ||
+        created.data.from_thread !== run.thread_id ||
+        typeof created.data.from_run !== "string"
+      )
+        return undefined;
+      const previous = store.runs.get(created.data.from_run);
+      if (
+        !previous ||
+        previous.thread_id !== run.thread_id ||
+        previous.agent_id !== run.agent_id ||
+        previous.started_at > created.at ||
+        previous.started_at > run.started_at
+      )
+        return undefined;
+      run = previous;
+      continue;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/** An owner-started task may use a bounded new handoff chain, not inherit earlier parents' depth. */
+export function authorizedExistingHandoff(
+  store: Store,
+  task: Task,
+  agent: { id: string; thread_id: string; run_id: string },
+): "allowed" | "limit" | "denied" | undefined {
+  const thread = store.threads.get(agent.thread_id);
+  const run = store.runs.get(agent.run_id);
+  if (
+    task.assignee !== agent.id ||
+    thread?.task_id !== task.id ||
+    run?.thread_id !== thread.id ||
+    run.agent_id !== agent.id ||
+    run.ended_at
+  )
+    return undefined;
+  const events = store.tasks.events(task.id);
+  const anchor = events.findLastIndex(
+    (e) => e.by === "owner" && (Object.hasOwn(e.data, "assignee") || e.data.proposed === false),
+  );
+  const authorization = events[anchor];
+  if (!authorization) return undefined;
+  if (authorization.data.assignee === null || run.started_at < authorization.at) return "denied";
+  const initial = events.slice(0, anchor + 1).findLast((e) => Object.hasOwn(e.data, "assignee"))?.data.assignee;
+  if (typeof initial !== "string") return "denied";
+  let previous: unknown = initial;
+  let transfers = 0;
+  for (const event of events.slice(anchor + 1)) {
+    if (!Object.hasOwn(event.data, "assignee")) continue;
+    const next = event.data.assignee;
+    if (next !== previous) {
+      if (typeof next !== "string" || event.by !== previous) return "denied";
+      transfers++;
+    }
+    previous = next;
+  }
+  if (previous !== task.assignee) return "denied";
+  return transfers >= MAX_HANDOFF_DEPTH ? "limit" : "allowed";
 }
 
 /** Review rounds an agent reviewer gets on one task before the owner decides. */

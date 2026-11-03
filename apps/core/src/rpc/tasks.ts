@@ -33,6 +33,8 @@ import {
   type Asker,
   addComment,
   askMentioned,
+  authorizedChildHandoff,
+  authorizedExistingHandoff,
   consultFromAgent,
   proposalReason,
   reviewRequested,
@@ -270,7 +272,19 @@ export function taskHandlers(
       const due = dueOf(p.due_at);
       const remind = dueOf(p.remind_at);
       const start = dueOf(p.start_at);
-      const forced = ctx.agent ? proposalReason(store, parent, p.assignee, ctx.agent.id) : undefined;
+      const active = ctx.agent
+        ? authorizedChildHandoff(store, parent ? store.tasks.get(parent) : undefined, ctx.agent, p.assignee)
+        : undefined;
+      const forced = ctx.agent
+        ? active === "limit"
+          ? "the active owner-authorized chain reached its handoff limit"
+          : active === "backflow"
+            ? "it gives work back up its active chain"
+            : proposalReason(store, parent, p.assignee, ctx.agent.id, {
+                ignoreHistoricalDepth: active === "allowed",
+                ignoreHistoricalBackflow: active === "allowed",
+              })
+        : undefined;
       const proposed = Boolean(p.propose) || Boolean(forced);
       checkTransfer(ctx, {
         assignee: p.assignee,
@@ -336,9 +350,26 @@ export function taskHandlers(
       if (c.proposed === false && agentScope(ctx)) throw unauthorized("only the owner accepts a proposed task");
       const accepting = Boolean(cur.proposed) && c.proposed === false;
       // Handing it to another agent follows the rules of giving it new: deep or back up the chain, it is a proposal.
+      const handoff =
+        ctx.agent && c.assignee && c.assignee !== cur.assignee && !cur.proposed
+          ? authorizedExistingHandoff(store, cur, ctx.agent)
+          : undefined;
+      const active =
+        handoff === undefined && ctx.agent && c.assignee && c.assignee !== cur.assignee && !cur.proposed
+          ? authorizedChildHandoff(store, cur, ctx.agent, c.assignee)
+          : undefined;
       const forced =
         ctx.agent && c.assignee && c.assignee !== cur.assignee && !cur.proposed
-          ? proposalReason(store, cur.parent_id, c.assignee, ctx.agent.id)
+          ? handoff === "limit" || active === "limit"
+            ? "the active owner-authorized chain reached its handoff limit"
+            : handoff === "denied"
+              ? "the owner's earlier authorization no longer covers this run"
+              : active === "backflow"
+                ? "it gives work back up its active chain"
+                : proposalReason(store, cur.parent_id, c.assignee, ctx.agent.id, {
+                    ignoreHistoricalDepth: handoff === "allowed" || active === "allowed",
+                    ignoreHistoricalBackflow: active === "allowed",
+                  })
           : undefined;
       // Its agent stays only if it can work there.
       const keeper = c.assignee !== undefined ? c.assignee : cur.assignee;
