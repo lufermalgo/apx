@@ -502,3 +502,30 @@ test("being in Apps is kept apart from being an app: what the owner put there st
     cleanup();
   }
 });
+
+test("upgrading indexes model log by run without changing saved entries", () => {
+  const { db, cleanup } = upgradeFrom("CREATE INDEX model_log_run_seq", (db) => {
+    const thread = db.prepare(
+      "INSERT INTO threads (id, kind, title, agent_ids, created_at, updated_at) VALUES (?, 'loose', ?, '[]', '2026-10-01', '2026-10-01')",
+    );
+    thread.run("thread-a", "A");
+    thread.run("thread-b", "B");
+    const insert = db.prepare("INSERT INTO model_log (thread_id, seq, run_id, item) VALUES (?, ?, ?, ?)");
+    insert.run("thread-a", 1, "run-a", '{"text":"one"}');
+    insert.run("thread-a", 2, "run-b", '{"text":"two"}');
+    insert.run("thread-b", 3, null, '{"text":"legacy"}');
+  });
+  try {
+    const rows = db.prepare("SELECT item FROM model_log WHERE run_id = ? ORDER BY seq").all("run-a");
+    assert.deepEqual(
+      rows.map((row) => row.item),
+      ['{"text":"one"}'],
+    );
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT item FROM model_log WHERE run_id = ? ORDER BY seq").all("run-a");
+    assert.match(String(plan[0]?.detail), /USING INDEX model_log_run_seq/);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM model_log").get()?.count, 3);
+  } finally {
+    db.close();
+    cleanup();
+  }
+});
